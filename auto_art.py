@@ -8,10 +8,11 @@ import sys
 sys.path.append(config.path_to_style_transfer)
 sys.path.append(config.path_to_style_transfer + '/src')
 from evaluate import simple_evaluate
+from perlin_noise import generate_perlin_noise_2d, generate_perlin_noise_3d
 
 
 class AutoArt:
-    def __init__(self, museum='general', image_source='examples/content/chicago.jpg'):
+    def __init__(self, museum='general', image_source='examples/content/exactitudes.jpg'):
         self.date = datetime.datetime
         self.image_source = image_source
         self.museum = museum
@@ -37,17 +38,23 @@ class AutoArt:
             print(model_path)
             self.random_styled_images.append(simple_evaluate(self.final_image, model_path))
 
-    def _repaint(self, iterations=2):
+    def _repaint(self, iterations=2, type='stitch'):
+        assert type in ['stitch', 'perlin']
         self.reset()
         repaintings = []
         for i in range(iterations):
             self.paint()
-            # Clear strip history to assert unique stripping pattern per iteration
-            self.strips = [None, None]
-            # Increase number of strips with each iteration
-            self.stitch_paintings(strips=randint(10, 11), axis=0)
-            self.stitch_paintings(strips=randint(10, 11), axis=1)
-            repaintings.append(self.final_image.copy())
+            # Blend style images using appropriate mechanism
+            if type == 'stitch':
+                # Clear strip history to assert unique stripping pattern per iteration
+                self.strips = [None, None]
+                # Increase number of strips with each iteration
+                self.stitch_paintings(strips=randint(10, 11), axis=0)
+                self.stitch_paintings(strips=randint(10, 11), axis=1)
+                repaintings.append(self.final_image.copy())
+            elif type == 'perlin':
+                self.perlin_blend_paintings()
+                repaintings.append(self.final_image.copy())
 
         return repaintings
 
@@ -93,6 +100,37 @@ class AutoArt:
             # Calculate frame duration, so every stitching procedure takes an equal amount of time the resulting GIF
             length_difference = len(self.gif_frames) - previous_length
             self.frame_duration = self.frame_duration + list(np.ones(length_difference)/length_difference)
+
+    def perlin_blend_paintings(self, noise=None):
+        if not noise:
+            noise = generate_perlin_noise_2d(self.shape[:2], (3, 3))
+        assert noise.max() == 1 and noise.min() == 0
+        # Resize noise level to match the amount of randomized style models
+        noise = noise * 3
+        # Create map
+        map = noise.repeat(3, axis=1).reshape((self.shape[0], self.shape[1], 3))
+
+        # Blend 3 random styled images using a circle representation of the noise level
+        # 0 -> A 1 -> B 2 -> C 3 -> A
+        map[map == 3] = 0
+        region_0 = (0 <= map) & (map < 1)
+        region_1 = (1 <= map) & (map < 2)
+        region_2 = (2 <= map) & (map < 3)
+
+        A = self.random_styled_images[-3]
+        B = self.random_styled_images[-2]
+        C = self.random_styled_images[-1]
+
+        blended_image = np.zeros(map.shape)
+
+        # Blend regions
+        blended_image[region_0] = A[region_0] * (1 - map[region_0]) + B[region_0] * map[region_0]
+
+        blended_image[region_1] = B[region_1] * ((1 - map[region_1]) % 1) + C[region_1] * (map[region_1] % 1)
+
+        blended_image[region_2] = C[region_2] * ((1 - map[region_2]) % 1) + A[region_2] * (map[region_2] % 1)
+
+        self.final_image = blended_image.astype('uint8').copy()
 
     def _create_stitching_frames(self, num_frames=10):
         # Protected for aesthetic reasons
@@ -156,7 +194,7 @@ class AutoArt:
                                 loop=0)
 
 
-artist = AutoArt(museum='stedelijk', image_source='PATH/TO/example.jpg')
+artist = AutoArt(museum='stedelijk', image_source='examples/content/exactitudes.jpg')
 
 artist.create_repaint_frames(iterations=3, intermediate_frames=50)
 

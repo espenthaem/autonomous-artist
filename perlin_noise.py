@@ -78,4 +78,6 @@ def generate_perlin_noise_3d(shape, res):
     n11 = n011 * (1 - t[:, :, :, 0]) + t[:, :, :, 0] * n111
     n0 = (1 - t[:, :, :, 1]) * n00 + t[:, :, :, 1] * n10
     n1 = (1 - t[:, :, :, 1]) * n01 + t[:, :, :, 1] * n11
-    return ((1 - t[:, :, :, 2]) * n0 + t[:, :, :, 2] * n1)
+    out = ((1 - t[:, :, :, 2]) * n0 + t[:, :, :, 2] * n1)
+    # Normalize and return
+    return (out - out.min()) / (out.max() - out.min())

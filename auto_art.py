@@ -8,6 +8,8 @@ import sys
 sys.path.append(config.path_to_style_transfer)
 sys.path.append(config.path_to_style_transfer + '/src')
 from evaluate import simple_evaluate
+from utilities import smallest_divisor
+from utilities import alpha_blend
 from perlin_noise import generate_perlin_noise_2d, generate_perlin_noise_3d
 
 
@@ -38,25 +40,20 @@ class AutoArt:
             print(model_path)
             self.random_styled_images.append(simple_evaluate(self.final_image, model_path))
 
-    def _repaint(self, iterations=2, type='stitch'):
+    def _repaint(self, type='stitch'):
         assert type in ['stitch', 'perlin']
-        self.reset()
-        repaintings = []
-        for i in range(iterations):
-            self.paint()
-            # Blend style images using appropriate mechanism
-            if type == 'stitch':
-                # Clear strip history to assert unique stripping pattern per iteration
-                self.strips = [None, None]
-                # Increase number of strips with each iteration
-                self.stitch_paintings(strips=randint(10, 11), axis=0)
-                self.stitch_paintings(strips=randint(10, 11), axis=1)
-                repaintings.append(self.final_image.copy())
-            elif type == 'perlin':
-                self.perlin_blend_paintings()
-                repaintings.append(self.final_image.copy())
+        self.paint()
+        # Blend style images using appropriate mechanism
+        if type == 'stitch':
+            # Clear strip history to assert unique stripping pattern per iteration
+            self.strips = [None, None]
+            # Increase number of strips with each iteration
+            self.stitch_paintings(strips=randint(10, 11), axis=0)
+            self.stitch_paintings(strips=randint(10, 11), axis=1)
+        elif type == 'perlin':
+            self.perlin_blend_paintings()
 
-        return repaintings
+        return self.final_image.copy()
 
     def stitch_paintings(self, strips=10, axis=1, save_frames=False):
         # Save current number of frames, to be used for calculation of the frame duration
@@ -102,8 +99,11 @@ class AutoArt:
             self.frame_duration = self.frame_duration + list(np.ones(length_difference)/length_difference)
 
     def perlin_blend_paintings(self, noise=None):
-        if not noise:
-            noise = generate_perlin_noise_2d(self.shape[:2], (3, 3))
+        if noise is None:
+            # Determine the amount of periods of noise to generate along each axis
+            res_x = smallest_divisor(self.shape[0])
+            res_y = smallest_divisor(self.shape[1])
+            noise = generate_perlin_noise_2d(self.shape[:2], (res_x, res_y))
         assert noise.max() == 1 and noise.min() == 0
         # Resize noise level to match the amount of randomized style models
         noise = noise * 3
@@ -132,37 +132,51 @@ class AutoArt:
 
         self.final_image = blended_image.astype('uint8').copy()
 
-    def _create_stitching_frames(self, num_frames=10):
-        # Protected for aesthetic reasons
-        # For aesthetic reasons, create first frame during first stitching iteration on a random axis
-        random_axis = choice(2)
-        self.stitch_paintings(axis=random_axis, strips=randint(1, 20), save_frames=True)
-
-        # Stitch the other axis without saving the intermediate frames
-        self.stitch_paintings(axis=(1 - random_axis), strips=randint(1, 20), save_frames=True)
-
-        # Generate remaining frames
-        for i in range(num_frames - 1):
-            print('Creating frame # %s' % i)
-            # Perform random stitching and save to frames array as PIL Image
-            self.stitch_paintings(axis=choice(2), strips=randint(1, 20))
-            self.gif_frames.append(Image.fromarray(self.final_image))
-
-    def create_repaint_frames(self, iterations=2, intermediate_frames=10):
+    def create_stitch_frames(self, iterations=2, intermediate_frames=10):
         # Construct array of images that will appear in the final GIF
         images = [self.image]
-        iteration_images = self._repaint(iterations)
         for i in range(iterations):
-            images.extend(self.random_styled_images[i * 3: i * 3 + 3])
-            images.append(iteration_images[i])
+            repainting = self._repaint(type='stitch')
+            images.extend(self.random_styled_images[-3:])
+            images.append(repainting)
 
-        # Construct individual GIF frames of the blending of the actual images
+        # Construct individual GIF frames using simple alpha blending
         for i in range(len(images) - 1):
             blend_0 = Image.fromarray(images[i])
             blend_1 = Image.fromarray(images[i + 1])
-            for j in np.linspace(0, 1, intermediate_frames):
-                blended = Image.blend(blend_0, blend_1, j)
-                self.gif_frames.append(blended)
+            self.gif_frames.extend(alpha_blend(blend_0, blend_1, intermediate_frames))
+
+    def create_perlin_frames(self, iterations=2, intermediate_frames=10):
+        # Generate 3D perlin noise to blend iterations of styled images
+        res_x = smallest_divisor(self.shape[0])
+        res_y = smallest_divisor(self.shape[1])
+        res_z = smallest_divisor(intermediate_frames)
+        noise_3d = generate_perlin_noise_3d((self.shape[0], self.shape[1], intermediate_frames),
+                                            (res_x, res_y, res_z))
+        # Start with the actual input image
+        self.gif_frames.append(Image.fromarray(self.image))
+
+        for i in range(iterations):
+            repainting = self._repaint(type='perlin')
+            # Create intermediate frames by applying a 2D slice of 3D blending noise to the styled images
+            for j in range(intermediate_frames):
+                # Scale 2D slice of 3D noise to [-1, 1]
+                noise_2d = noise_3d[:, :, j]
+                noise_2d = (noise_2d - noise_2d.min()) / (noise_2d.max() - noise_2d.min())
+                self.perlin_blend_paintings(noise=noise_2d)
+                # Transition from the last frame of the previous iteration to first intermediate frame
+                # using alpha blending
+                if j == 0:
+                    blend_0 = self.gif_frames[-1]
+                    blend_1 = Image.fromarray(self.final_image)
+                    self.gif_frames.extend(alpha_blend(blend_0, blend_1, int(intermediate_frames/4)))
+                else:
+                    self.gif_frames.append(Image.fromarray(self.final_image))
+
+            # Transition from the final blend frame to the repainting using simple alpha blending
+            blend_0 = self.gif_frames[-1]
+            blend_1 = Image.fromarray(repainting)
+            self.gif_frames.extend(alpha_blend(blend_0, blend_1, int(intermediate_frames/4)))
 
     def create_gif(self, gif_path=None, reverse_frames=False, duration=250):
         """
@@ -196,6 +210,6 @@ class AutoArt:
 
 artist = AutoArt(museum='stedelijk', image_source='examples/content/exactitudes.jpg')
 
-artist.create_repaint_frames(iterations=3, intermediate_frames=50)
+artist.create_stitch_frames(iterations=2, intermediate_frames=50)
 
-artist.create_gif(duration=40, reverse_frames=True)
+artist.create_gif(duration=30, reverse_frames=True, gif_path='examples/results/exactitudes_stitch.gif')

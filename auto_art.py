@@ -2,9 +2,10 @@ import config
 import datetime
 import numpy as np
 import random
-from numpy.random import choice, randint
-from PIL import Image
 import sys
+import cv2 as cv
+from PIL import Image
+from numpy.random import choice, randint
 sys.path.append(config.path_to_style_transfer)
 sys.path.append(config.path_to_style_transfer + '/src')
 from evaluate import simple_evaluate
@@ -25,13 +26,12 @@ class AutoArt:
         self.final_image = self.image.copy()
         self.shape = self.image.shape
         self.strips = [None, None]
-        self.gif_frames = []
-        self.frame_duration = []
+        self.frames = []
 
     def reset(self):
         self.final_image = self.image.copy()
         self.strips = [None, None]
-        self.gif_frames = []
+        self.frames = []
 
     def paint(self):
         self.random_models = np.random.choice(self.style_models, size=3, replace=False)
@@ -57,7 +57,7 @@ class AutoArt:
 
     def stitch_paintings(self, strips=10, axis=1, save_frames=False):
         # Save current number of frames, to be used for calculation of the frame duration
-        previous_length = len(self.gif_frames)
+        previous_length = len(self.frames)
 
         # Start Stitching procedure
         self.strips[axis] = strips
@@ -74,7 +74,7 @@ class AutoArt:
                     self.final_image[strip * strip_size:(strip + 1) * strip_size, :] = \
                         style_img[strip * strip_size:(strip + 1) * strip_size, :]
                 if save_frames:
-                    self.gif_frames.append(Image.fromarray(self.final_image))
+                    self.frames.append(Image.fromarray(self.final_image))
         else:
             o_strips = self.strips[1-axis]
             o_size = int(self.shape[axis]/strips)
@@ -91,12 +91,7 @@ class AutoArt:
                         self.final_image[strip * strip_size:(strip + 1) * strip_size, o_strip*o_size:(o_strip+1)*o_size] = \
                             style_img[strip * strip_size:(strip + 1) * strip_size, o_strip*o_size:(o_strip+1)*o_size]
                     if save_frames:
-                        self.gif_frames.append(Image.fromarray(self.final_image))
-
-        if save_frames:
-            # Calculate frame duration, so every stitching procedure takes an equal amount of time the resulting GIF
-            length_difference = len(self.gif_frames) - previous_length
-            self.frame_duration = self.frame_duration + list(np.ones(length_difference)/length_difference)
+                        self.frames.append(Image.fromarray(self.final_image))
 
     def perlin_blend_paintings(self, noise=None):
         if noise is None:
@@ -144,7 +139,7 @@ class AutoArt:
         for i in range(len(images) - 1):
             blend_0 = Image.fromarray(images[i])
             blend_1 = Image.fromarray(images[i + 1])
-            self.gif_frames.extend(alpha_blend(blend_0, blend_1, intermediate_frames))
+            self.frames.extend(alpha_blend(blend_0, blend_1, intermediate_frames))
 
     def create_perlin_frames(self, iterations=2, intermediate_frames=10):
         # Generate 3D perlin noise to blend iterations of styled images
@@ -154,7 +149,7 @@ class AutoArt:
         noise_3d = generate_perlin_noise_3d((self.shape[0], self.shape[1], intermediate_frames),
                                             (res_x, res_y, res_z))
         # Start with the actual input image
-        self.gif_frames.append(Image.fromarray(self.image))
+        self.frames.append(Image.fromarray(self.image))
 
         for i in range(iterations):
             repainting = self._repaint(type='perlin')
@@ -167,49 +162,59 @@ class AutoArt:
                 # Transition from the last frame of the previous iteration to first intermediate frame
                 # using alpha blending
                 if j == 0:
-                    blend_0 = self.gif_frames[-1]
+                    blend_0 = self.frames[-1]
                     blend_1 = Image.fromarray(self.final_image)
-                    self.gif_frames.extend(alpha_blend(blend_0, blend_1, int(intermediate_frames/4)))
+                    self.frames.extend(alpha_blend(blend_0, blend_1, int(intermediate_frames/4)))
                 else:
-                    self.gif_frames.append(Image.fromarray(self.final_image))
+                    self.frames.append(Image.fromarray(self.final_image))
 
             # Transition from the final blend frame to the repainting using simple alpha blending
-            blend_0 = self.gif_frames[-1]
+            blend_0 = self.frames[-1]
             blend_1 = Image.fromarray(repainting)
-            self.gif_frames.extend(alpha_blend(blend_0, blend_1, int(intermediate_frames/4)))
+            self.frames.extend(alpha_blend(blend_0, blend_1, int(intermediate_frames/4)))
 
-    def create_gif(self, gif_path=None, reverse_frames=False, duration=250):
+    def create_animation(self, out_path, reverse_frames=False, fps=20):
         """
-        Creates a gif of the gif_frames contained int he class. The gif is saved to the same locations as
-        the image source, unless another path is specified. Result are not very aesthetically pleasing, so
-        this function is just left for visualisation of the process.
-        :param gif_path:
-        :param reverse_frames:
-        :param duration:
+        Creates an animation of the frames contained in the class. The animation is saved as either .gif or .avi,
+        depending on the out_path that is specified.
+
+        :param out_path: str
+        :param reverse_frames: bool
+        :param fps: int
         """
 
-        assert len(self.gif_frames) > 0
-
-        if not gif_path:
-            gif_path = self.image_source[:self.image_source.rfind('.')] + '.gif'
+        assert len(self.frames) > 0
+        assert 'gif' in out_path or 'avi' in out_path
 
         # Add reversed frames if required
         if reverse_frames:
-            self.gif_frames = self.gif_frames + list(reversed(self.gif_frames[1:]))
-            self.frame_duration = self.frame_duration + list(reversed(self.frame_duration[1:]))
+            frames = self.frames + list(reversed(self.frames[1:]))
+        else:
+            frames = self.frames
 
-        # Save frames as gif
-        print(gif_path)
-        self.gif_frames[0].save(gif_path,
-                                format='GIF',
-                                append_images=self.gif_frames[1:],
-                                save_all=True,
-                                duration=duration,
-                                loop=0)
+        print(out_path)
+        if 'gif' in out_path:
+            # Save frames as gif
+            frames[0].save(out_path,
+                           format='GIF',
+                           append_images=self.frames[1:],
+                           save_all=True,
+                           duration=1000/fps,
+                           loop=0)
+
+        elif 'avi' in out_path:
+            # Save frames as video
+            four_cc = cv.VideoWriter_fourcc(*'DIVX')
+            writer = cv.VideoWriter(out_path, four_cc, fps, self.shape[:2])
+            for frame in frames:
+                writer.write(cv.cvtColor(np.array(frame), cv.COLOR_RGB2BGR))
+            writer.release()
 
 
-artist = AutoArt(museum='stedelijk', image_source='examples/content/exactitudes.jpg')
+if __name__ == '__main__':
+    artist = AutoArt(museum='stedelijk', image_source='examples/content/exactitudes.jpg')
 
-artist.create_stitch_frames(iterations=2, intermediate_frames=50)
+    artist.create_perlin_frames(iterations=3, intermediate_frames=50)
 
-artist.create_gif(duration=30, reverse_frames=True, gif_path='examples/results/exactitudes_stitch.gif')
+    artist.create_animation(out_path='examples/results/perlin_exactitudes.avi', reverse_frames=True, fps=10)
+

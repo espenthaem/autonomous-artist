@@ -31,7 +31,7 @@ def alpha_blend(blend_0, blend_1, frames=10):
         blend_0 = Image.fromarray(blend_0)
 
     if type(blend_1).__module__ == np.__name__:
-        blend_1 = Image.fromarray(blend_0)
+        blend_1 = Image.fromarray(blend_1)
 
     output_frames = []
     for alpha in np.linspace(0, 1, int(frames)):

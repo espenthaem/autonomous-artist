@@ -15,12 +15,17 @@ from perlin_noise import generate_perlin_noise_2d, generate_perlin_noise_3d
 
 
 class AutoArt:
-    def __init__(self, museum='general', image_source='examples/content/exactitudes.jpg'):
+    def __init__(self, museum='general', image_source='examples/content/exactitudes.jpg', size=None):
         self.date = datetime.datetime
         self.image_source = image_source
         self.museum = museum
         self.style_models = config.trained_models[museum]
-        self.image = np.array(Image.open(self.image_source).convert('RGB'))
+
+        if size is None:
+            self.image = np.array(Image.open(self.image_source).convert('RGB'))
+        else:
+            self.image = np.array(Image.open(self.image_source).convert('RGB').resize(size))
+
         self.random_styled_images = []
         self.random_models = None
         self.final_image = self.image.copy()
@@ -217,4 +222,5 @@ if __name__ == '__main__':
     artist.create_perlin_frames(iterations=3, intermediate_frames=50)
 
     artist.create_animation(out_path='examples/results/perlin_exactitudes.avi', reverse_frames=True, fps=10)
+
 

@@ -210,7 +210,7 @@ class AutoArt:
         elif 'avi' in out_path:
             # Save frames as video
             four_cc = cv.VideoWriter_fourcc(*'DIVX')
-            writer = cv.VideoWriter(out_path, four_cc, fps, self.shape[:2])
+            writer = cv.VideoWriter(out_path, four_cc, fps, (self.shape[1], self.shape[0]))
             for frame in frames:
                 writer.write(cv.cvtColor(np.array(frame), cv.COLOR_RGB2BGR))
             writer.release()
@@ -222,5 +222,3 @@ if __name__ == '__main__':
     artist.create_perlin_frames(iterations=3, intermediate_frames=50)
 
     artist.create_animation(out_path='examples/results/perlin_exactitudes.avi', reverse_frames=True, fps=10)
-
-
